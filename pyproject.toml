@@ -1,0 +1,21 @@
+[project]
+name = "autonomous-driving-project"
+version = "0.1.0"
+description = "Tuning and training the YOLO models for the Autonomous Driving course."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy<2",
+    "pathlib>=1.0.1",
+    "pillow>=12.1.1",
+    "torch==2.2.2",
+    "torchvision==0.17.2",
+    "ultralytics>=8.4.30",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/<kitti_object_detection>"]
