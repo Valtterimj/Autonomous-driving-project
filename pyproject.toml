@@ -11,6 +11,8 @@ dependencies = [
     "torch==2.2.2",
     "torchvision==0.17.2",
     "ultralytics>=8.4.30",
+    "matplotlib>=3.8.0",
+    "pyyaml>=6.0",
 ]
 
 [build-system]
