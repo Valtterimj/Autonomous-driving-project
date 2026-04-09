@@ -227,33 +227,43 @@ def evaluate_class_difficulty(
         gt_boxes = all_gt[sample_id]
         matched = gt_matched_flags[sample_id]
 
-        # Search ALL same-class GTs (both valid and ignored) for best IoU match
-        best_iou = 0.0
-        best_gt_idx = -1
-        all_class_indices = sample_valid_gt[sample_id] + sample_ignored_gt[sample_id]
-
-        for gt_idx in all_class_indices:
+        # Step 1: Find best overlapping VALID (unmatched) GT
+        best_valid_iou = 0.0
+        best_valid_idx = -1
+        for gt_idx in sample_valid_gt[sample_id]:
             if matched[gt_idx]:
                 continue
             iou = compute_iou(pred_box, gt_boxes[gt_idx].bbox)
-            if iou > best_iou:
-                best_iou = iou
-                best_gt_idx = gt_idx
+            if iou > best_valid_iou:
+                best_valid_iou = iou
+                best_valid_idx = gt_idx
 
-        if best_iou >= iou_threshold and best_gt_idx >= 0:
-            if best_gt_idx in sample_valid_gt[sample_id]:
-                # Matched a valid GT -> true positive
-                tp[i] = 1
-                matched[best_gt_idx] = True
-            else:
-                # Matched an ignored GT (same class, wrong difficulty) -> skip
-                ignored[i] = 1
-                matched[best_gt_idx] = True
-        elif is_dontcare:
-            # Overlaps DontCare region -> skip
+        if best_valid_iou >= iou_threshold and best_valid_idx >= 0:
+            # Matched a valid GT -> true positive
+            tp[i] = 1
+            matched[best_valid_idx] = True
+            continue
+
+        # Step 2: No valid match — check ignored GTs (same class, wrong difficulty).
+        # Ignored GTs are NOT consumed: multiple predictions can match the same
+        # ignored GT and all should be skipped.
+        best_ignored_iou = 0.0
+        for gt_idx in sample_ignored_gt[sample_id]:
+            iou = compute_iou(pred_box, gt_boxes[gt_idx].bbox)
+            if iou > best_ignored_iou:
+                best_ignored_iou = iou
+
+        if best_ignored_iou >= iou_threshold:
             ignored[i] = 1
-        else:
-            fp[i] = 1
+            continue
+
+        # Step 3: Check DontCare regions
+        if is_dontcare:
+            ignored[i] = 1
+            continue
+
+        # No match -> false positive
+        fp[i] = 1
 
     # Remove ignored predictions before computing precision/recall
     keep = ignored == 0
