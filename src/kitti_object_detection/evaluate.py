@@ -166,19 +166,27 @@ def evaluate_class_difficulty(
     all_pred_entries = []
     total_gt = 0
     gt_matched_flags: dict[str, list[bool]] = {}
+    # Per-sample lists of GT indices, split into valid vs ignored
+    sample_valid_gt: dict[str, list[int]] = {}
+    sample_ignored_gt: dict[str, list[int]] = {}
 
     for sample_id in all_gt:
         gt_boxes = all_gt[sample_id]
         difficulty_mask = filter_by_difficulty(gt_boxes, difficulty)
 
-        # Filter GT to this class and difficulty
-        class_gt_indices = []
+        valid_indices = []
+        ignored_indices = []
         for i, gt in enumerate(gt_boxes):
-            if gt.class_name == class_name and difficulty_mask[i]:
-                class_gt_indices.append(i)
+            if gt.class_name == class_name:
+                if difficulty_mask[i]:
+                    valid_indices.append(i)
+                else:
+                    ignored_indices.append(i)
 
-        total_gt += len(class_gt_indices)
+        total_gt += len(valid_indices)
         gt_matched_flags[sample_id] = [False] * len(gt_boxes)
+        sample_valid_gt[sample_id] = valid_indices
+        sample_ignored_gt[sample_id] = ignored_indices
 
         # Collect DontCare boxes for this sample
         dontcare_boxes = [
@@ -202,7 +210,6 @@ def evaluate_class_difficulty(
                 pred.confidence,
                 sample_id,
                 pred.bbox,
-                class_gt_indices,
                 is_dontcare,
             ))
 
@@ -214,28 +221,57 @@ def evaluate_class_difficulty(
 
     tp = np.zeros(len(all_pred_entries))
     fp = np.zeros(len(all_pred_entries))
+    ignored = np.zeros(len(all_pred_entries))
 
-    for i, (conf, sample_id, pred_box, class_gt_indices, is_dontcare) in enumerate(all_pred_entries):
+    for i, (conf, sample_id, pred_box, is_dontcare) in enumerate(all_pred_entries):
         gt_boxes = all_gt[sample_id]
         matched = gt_matched_flags[sample_id]
 
-        best_iou = 0.0
-        best_gt_idx = -1
-
-        for gt_idx in class_gt_indices:
+        # Step 1: Find best overlapping VALID (unmatched) GT
+        best_valid_iou = 0.0
+        best_valid_idx = -1
+        for gt_idx in sample_valid_gt[sample_id]:
+            if matched[gt_idx]:
+                continue
             iou = compute_iou(pred_box, gt_boxes[gt_idx].bbox)
-            if iou > best_iou:
-                best_iou = iou
-                best_gt_idx = gt_idx
+            if iou > best_valid_iou:
+                best_valid_iou = iou
+                best_valid_idx = gt_idx
 
-        if best_iou >= iou_threshold and best_gt_idx >= 0 and not matched[best_gt_idx]:
+        if best_valid_iou >= iou_threshold and best_valid_idx >= 0:
+            # Matched a valid GT -> true positive
             tp[i] = 1
-            matched[best_gt_idx] = True
-        elif is_dontcare:
-            # Don't count as FP if overlapping DontCare
-            pass
-        else:
-            fp[i] = 1
+            matched[best_valid_idx] = True
+            continue
+
+        # Step 2: No valid match — check ignored GTs (same class, wrong difficulty).
+        # Ignored GTs are NOT consumed: multiple predictions can match the same
+        # ignored GT and all should be skipped.
+        best_ignored_iou = 0.0
+        for gt_idx in sample_ignored_gt[sample_id]:
+            iou = compute_iou(pred_box, gt_boxes[gt_idx].bbox)
+            if iou > best_ignored_iou:
+                best_ignored_iou = iou
+
+        if best_ignored_iou >= iou_threshold:
+            ignored[i] = 1
+            continue
+
+        # Step 3: Check DontCare regions
+        if is_dontcare:
+            ignored[i] = 1
+            continue
+
+        # No match -> false positive
+        fp[i] = 1
+
+    # Remove ignored predictions before computing precision/recall
+    keep = ignored == 0
+    tp = tp[keep]
+    fp = fp[keep]
+
+    if len(tp) == 0:
+        return 0.0, np.array([]), np.array([])
 
     cum_tp = np.cumsum(tp)
     cum_fp = np.cumsum(fp)
